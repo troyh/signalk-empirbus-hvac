@@ -47,6 +47,7 @@ interface PluginOptions {
   socketcanIface:  string;
   pollIntervalMs:  number;
   mcuSrc:          number;
+  mySrc:           number;
 }
 
 const PLUGIN_ID = 'signalk-empirbus-hvac';
@@ -128,6 +129,7 @@ export = function(app: SignalKApp) {
       const session = new HvacSession({
         transport: makeTransport(options),
         mcuSrc:    options.mcuSrc,
+        mySrc:     options.mySrc,
         logger:    (msg) => app.debug(msg),
       });
       activeSession = session;
@@ -207,6 +209,14 @@ export = function(app: SignalKApp) {
           minimum:     0,
           maximum:     251,
           description: 'N2K source address of the EmpirBus MCU-150 on the bus. Default 3 matches the Azimut 60 Fly factory configuration.',
+        },
+        mySrc: {
+          type:        'number',
+          title:       'Our N2K source address',
+          default:     11,
+          minimum:     0,
+          maximum:     251,
+          description: 'N2K source address this plugin claims for itself on the bus. Must not collide with any other device.',
         },
       },
     },

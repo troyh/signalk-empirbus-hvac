@@ -14,6 +14,7 @@
  *   0 = Salon   1 = Helm   2 = Guest   3 = VIP   4 = Owner
  *
  * --mcu=N / --mcu-src=N: N2K source address of the MCU (default 3).
+ * --my-src=N:            N2K source address we claim for ourselves (default 11).
  *
  * Set DEBUG=1 to dump every raw CAN frame read/written.
  */
@@ -29,22 +30,24 @@ import {
 
 const toF = (c: number) => Math.round((c * 9 / 5 + 32) * 10) / 10;
 
-function parseArgs(argv: string[]): { startZone: number; mcuSrc: number } {
-  let mcuSrc  = 3;
+function parseArgs(argv: string[]): { startZone: number; mcuSrc: number; mySrc: number } {
+  let mcuSrc = 3;
+  let mySrc  = 11;
   const positional: string[] = [];
   for (const arg of argv) {
-    const m = arg.match(/^--mcu(?:-src)?=(\d+)$/);
-    if (m) { mcuSrc = parseInt(m[1]!, 10); continue; }
+    let m;
+    if ((m = arg.match(/^--mcu(?:-src)?=(\d+)$/))) { mcuSrc = parseInt(m[1]!, 10); continue; }
+    if ((m = arg.match(/^--my-src=(\d+)$/)))       { mySrc  = parseInt(m[1]!, 10); continue; }
     positional.push(arg);
   }
   const startZone = parseInt(positional[0] ?? '0', 10);
-  return { startZone, mcuSrc };
+  return { startZone, mcuSrc, mySrc };
 }
 
 async function main() {
-  const { startZone, mcuSrc } = parseArgs(process.argv.slice(2));
+  const { startZone, mcuSrc, mySrc } = parseArgs(process.argv.slice(2));
   if (isNaN(startZone) || startZone < 0 || startZone > 4) {
-    console.error('Usage: hvac_zone_switch.ts [zone 0-4] [--mcu=N]');
+    console.error('Usage: hvac_zone_switch.ts [zone 0-4] [--mcu=N] [--my-src=N]');
     ZONE_NAMES.forEach((n, i) => console.error(`  ${i} = ${n}`));
     process.exit(1);
   }
@@ -52,9 +55,14 @@ async function main() {
     console.error(`Invalid --mcu value: must be 0-251 (got ${mcuSrc})`);
     process.exit(1);
   }
+  if (isNaN(mySrc) || mySrc < 0 || mySrc > 251) {
+    console.error(`Invalid --my-src value: must be 0-251 (got ${mySrc})`);
+    process.exit(1);
+  }
 
   console.log(`[*] Starting zone: ${ZONE_NAMES[startZone]} (${startZone})`);
   console.log(`[*] MCU source address: ${mcuSrc}`);
+  console.log(`[*] Our source address: ${mySrc}`);
 
   const socketcanIface = process.env.SOCKETCAN_IFACE;
   let transport: CanTransport;
@@ -71,6 +79,7 @@ async function main() {
   const session = new HvacSession({
     transport,
     mcuSrc,
+    mySrc,
     logger: (msg) => console.log(msg),
   });
 
