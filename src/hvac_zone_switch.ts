@@ -5,13 +5,15 @@
  * intended for testing and debugging independent of the Signal K plugin.
  *
  * Usage (YDWG-02, default):
- *   YDWG_HOST=192.168.1.x YDWG_PORT=1457 ts-node hvac_zone_switch.ts [zone]
+ *   YDWG_HOST=192.168.1.x YDWG_PORT=1457 ts-node hvac_zone_switch.ts [zone] [--mcu=N]
  *
  * Usage (SocketCAN):
- *   SOCKETCAN_IFACE=can0 ts-node hvac_zone_switch.ts [zone]
+ *   SOCKETCAN_IFACE=can0 ts-node hvac_zone_switch.ts [zone] [--mcu=N]
  *
  * Zone numbers (optional — defaults to 0/Salon as starting zone):
  *   0 = Salon   1 = Helm   2 = Guest   3 = VIP   4 = Owner
+ *
+ * --mcu=N / --mcu-src=N: N2K source address of the MCU (default 3).
  *
  * Set DEBUG=1 to dump every raw CAN frame read/written.
  */
@@ -27,16 +29,32 @@ import {
 
 const toF = (c: number) => Math.round((c * 9 / 5 + 32) * 10) / 10;
 
+function parseArgs(argv: string[]): { startZone: number; mcuSrc: number } {
+  let mcuSrc  = 3;
+  const positional: string[] = [];
+  for (const arg of argv) {
+    const m = arg.match(/^--mcu(?:-src)?=(\d+)$/);
+    if (m) { mcuSrc = parseInt(m[1]!, 10); continue; }
+    positional.push(arg);
+  }
+  const startZone = parseInt(positional[0] ?? '0', 10);
+  return { startZone, mcuSrc };
+}
+
 async function main() {
-  const zoneArg = parseInt(process.argv[2] ?? '0', 10);
-  if (isNaN(zoneArg) || zoneArg < 0 || zoneArg > 4) {
-    console.error('Usage: hvac_zone_switch.ts [zone 0-4]');
+  const { startZone, mcuSrc } = parseArgs(process.argv.slice(2));
+  if (isNaN(startZone) || startZone < 0 || startZone > 4) {
+    console.error('Usage: hvac_zone_switch.ts [zone 0-4] [--mcu=N]');
     ZONE_NAMES.forEach((n, i) => console.error(`  ${i} = ${n}`));
     process.exit(1);
   }
+  if (isNaN(mcuSrc) || mcuSrc < 0 || mcuSrc > 251) {
+    console.error(`Invalid --mcu value: must be 0-251 (got ${mcuSrc})`);
+    process.exit(1);
+  }
 
-  const startZone = zoneArg;
   console.log(`[*] Starting zone: ${ZONE_NAMES[startZone]} (${startZone})`);
+  console.log(`[*] MCU source address: ${mcuSrc}`);
 
   const socketcanIface = process.env.SOCKETCAN_IFACE;
   let transport: CanTransport;
@@ -52,6 +70,7 @@ async function main() {
 
   const session = new HvacSession({
     transport,
+    mcuSrc,
     logger: (msg) => console.log(msg),
   });
 

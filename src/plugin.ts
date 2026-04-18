@@ -46,6 +46,7 @@ interface PluginOptions {
   ydwgPort:        number;
   socketcanIface:  string;
   pollIntervalMs:  number;
+  mcuSrc:          number;
 }
 
 const PLUGIN_ID = 'signalk-empirbus-hvac';
@@ -126,6 +127,7 @@ export = function(app: SignalKApp) {
     while (!signal.aborted) {
       const session = new HvacSession({
         transport: makeTransport(options),
+        mcuSrc:    options.mcuSrc,
         logger:    (msg) => app.debug(msg),
       });
       activeSession = session;
@@ -197,6 +199,14 @@ export = function(app: SignalKApp) {
           default:     600000,
           minimum:     20000,
           description: 'How often to reconnect and cycle all zones. Each poll takes ~15s of bus activity. Default 600000 = 10 min.',
+        },
+        mcuSrc: {
+          type:        'number',
+          title:       'MCU N2K source address',
+          default:     3,
+          minimum:     0,
+          maximum:     251,
+          description: 'N2K source address of the EmpirBus MCU-150 on the bus. Default 3 matches the Azimut 60 Fly factory configuration.',
         },
       },
     },
