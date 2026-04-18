@@ -1,7 +1,18 @@
 {
-  "type": "module",
+  "name": "signalk-empirbus-hvac",
+  "version": "0.1.0",
+  "description": "Signal K plugin for EmpirBus MCU-150 HVAC integration (NMEA 2000)",
+  "main": "dist/plugin.js",
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk-category-hvac",
+    "empirbus",
+    "nmea2000",
+    "hvac"
+  ],
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "prepare": "tsc"
   },
   "devDependencies": {
     "@types/node": "^25.6.0"
