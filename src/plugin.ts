@@ -1,15 +1,17 @@
 /**
  * plugin.ts — Signal K plugin entry point for EmpirBus HVAC integration.
  *
- * Wraps HvacSession (from hvac_core.ts) in the Signal K plugin lifecycle:
- * on start, connect to the CAN bus, register with the MCU, and continuously
- * cycle zones — publishing temperature / setpoint / fan-speed deltas as they
- * arrive. On stop, abort the cycle loop and disconnect.
+ * Lifecycle:
+ *   start() kicks off a poll loop: connect → register → two-pass zone cycle →
+ *   disconnect → sleep pollIntervalMs → repeat. Re-registering each interval
+ *   avoids fighting the MCU's ~2s session timeout and lets us poll as
+ *   infrequently as we want. stop() aborts the loop and disconnects.
  *
  * Write support (setpoint / fan speed PUT handlers) is not yet implemented.
  */
 
 import {
+  RESPONSE_TIMEOUT_MS,
   YdwgGateway,
   SocketCanTransport,
   HvacSession,
@@ -43,9 +45,11 @@ interface PluginOptions {
   ydwgHost:        string;
   ydwgPort:        number;
   socketcanIface:  string;
+  pollIntervalMs:  number;
 }
 
 const PLUGIN_ID = 'signalk-empirbus-hvac';
+const CELSIUS_TO_KELVIN = 273.15;
 
 // Convert "Crew Cabin" → "crewCabin" for Signal K path segments.
 function zoneSlug(name: string): string {
@@ -57,11 +61,104 @@ function zoneSlug(name: string): string {
     .join('');
 }
 
-const CELSIUS_TO_KELVIN = 273.15;
+function makeTransport(options: PluginOptions): CanTransport {
+  return options.transport === 'socketcan'
+    ? new SocketCanTransport(options.socketcanIface)
+    : new YdwgGateway({ host: options.ydwgHost, port: options.ydwgPort });
+}
+
+function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) { resolve(); return; }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 export = function(app: SignalKApp) {
-  let session:         HvacSession | null     = null;
   let abortController: AbortController | null = null;
+  let activeSession:   HvacSession | null     = null;
+
+  function publishZone(zoneName: string, zones: Record<string, number>) {
+    const slug = zoneSlug(zoneName);
+    const values: DeltaValue[] = [];
+
+    if (zones['actual_temp'] !== undefined) {
+      values.push({
+        path:  `environment.inside.${slug}.temperature`,
+        value: zones['actual_temp'] + CELSIUS_TO_KELVIN,
+      });
+    }
+    if (zones['setpoint'] !== undefined) {
+      values.push({
+        path:  `environment.inside.${slug}.temperature.setpoint`,
+        value: zones['setpoint'] + CELSIUS_TO_KELVIN,
+      });
+    }
+    if (zones['fan_speed'] !== undefined) {
+      values.push({
+        path:  `environment.inside.${slug}.fan.speed`,
+        value: zones['fan_speed'],
+      });
+    }
+
+    if (values.length === 0) return;
+    app.handleMessage(PLUGIN_ID, {
+      updates: [{
+        timestamp: new Date().toISOString(),
+        values,
+      }],
+    });
+  }
+
+  async function pollLoop(options: PluginOptions, signal: AbortSignal) {
+    // Clamp defensively — missing/zero/negative values from stale saved
+    // settings would otherwise spin the loop with no sleep between polls.
+    const pollMs = Math.max(20000, options.pollIntervalMs || 600000);
+
+    while (!signal.aborted) {
+      const session = new HvacSession({
+        transport: makeTransport(options),
+        logger:    (msg) => app.debug(msg),
+      });
+      activeSession = session;
+
+      try {
+        app.setPluginStatus('Connecting to MCU...');
+        await session.start();
+        if (signal.aborted) break;
+
+        app.setPluginStatus('Polling zones...');
+        await session.cycleZones({
+          startZone:        0,
+          passes:           2,
+          overallTimeoutMs: RESPONSE_TIMEOUT_MS,
+          signal,
+          onZone:           publishZone,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        app.error(`Poll failed: ${msg}`);
+      } finally {
+        session.stop();
+        activeSession = null;
+      }
+
+      if (signal.aborted) break;
+
+      const nextAt = new Date(Date.now() + pollMs);
+      app.setPluginStatus(`Idle — next poll at ${nextAt.toLocaleTimeString()}`);
+      await abortableSleep(pollMs, signal);
+    }
+    app.setPluginStatus('Stopped');
+  }
 
   return {
     id:          PLUGIN_ID,
@@ -73,10 +170,10 @@ export = function(app: SignalKApp) {
       required: ['transport'],
       properties: {
         transport: {
-          type:    'string',
-          title:   'CAN transport',
-          enum:    ['ydwg', 'socketcan'],
-          default: 'ydwg',
+          type:        'string',
+          title:       'CAN transport',
+          enum:        ['ydwg', 'socketcan'],
+          default:     'ydwg',
           description: 'ydwg = Yacht Devices YDWG-02 TCP gateway; socketcan = Linux SocketCAN interface',
         },
         ydwgHost: {
@@ -94,80 +191,29 @@ export = function(app: SignalKApp) {
           title:   'SocketCAN interface name',
           default: 'can0',
         },
+        pollIntervalMs: {
+          type:        'number',
+          title:       'Poll interval (ms)',
+          default:     600000,
+          minimum:     20000,
+          description: 'How often to reconnect and cycle all zones. Each poll takes ~15s of bus activity. Default 600000 = 10 min.',
+        },
       },
     },
 
-    async start(options: PluginOptions) {
-      const transport: CanTransport = options.transport === 'socketcan'
-        ? new SocketCanTransport(options.socketcanIface)
-        : new YdwgGateway({ host: options.ydwgHost, port: options.ydwgPort });
-
-      session = new HvacSession({
-        transport,
-        logger: (msg) => app.debug(msg),
-      });
-
-      try {
-        app.setPluginStatus('Connecting to MCU...');
-        await session.start();
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        app.setPluginError(`Failed to start: ${msg}`);
-        session = null;
-        return;
-      }
-
+    start(options: PluginOptions) {
       abortController = new AbortController();
-      app.setPluginStatus('Connected — cycling zones');
-
-      session.cycleZones({
-        startZone: 0,
-        signal:    abortController.signal,
-        onZone: (zoneName, zones) => {
-          const slug   = zoneSlug(zoneName);
-          const values: DeltaValue[] = [];
-
-          if (zones['actual_temp'] !== undefined) {
-            values.push({
-              path:  `environment.inside.${slug}.temperature`,
-              value: zones['actual_temp'] + CELSIUS_TO_KELVIN,
-            });
-          }
-          if (zones['setpoint'] !== undefined) {
-            values.push({
-              path:  `environment.inside.${slug}.temperature.setpoint`,
-              value: zones['setpoint'] + CELSIUS_TO_KELVIN,
-            });
-          }
-          if (zones['fan_speed'] !== undefined) {
-            values.push({
-              path:  `environment.inside.${slug}.fan.speed`,
-              value: zones['fan_speed'],
-            });
-          }
-
-          if (values.length > 0) {
-            app.handleMessage(PLUGIN_ID, {
-              updates: [{
-                timestamp: new Date().toISOString(),
-                values,
-              }],
-            });
-          }
-        },
-      })
-        .then(() => { /* loop exited cleanly (signal aborted) */ })
-        .catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          app.error(`Cycle loop failed: ${msg}`);
-          app.setPluginError(`Cycle loop failed: ${msg}`);
-        });
+      pollLoop(options, abortController.signal).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        app.error(`Poll loop crashed: ${msg}`);
+        app.setPluginError(`Poll loop crashed: ${msg}`);
+      });
     },
 
     stop() {
       abortController?.abort();
-      session?.stop();
-      session         = null;
+      activeSession?.stop();
+      activeSession   = null;
       abortController = null;
     },
   };
