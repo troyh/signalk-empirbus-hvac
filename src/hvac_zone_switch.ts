@@ -641,11 +641,11 @@ async function main() {
       if (zdata) {
         const parts: string[] = [];
         if (zdata.actual_temp !== undefined)
-          parts.push(`actual_temp=${zdata.actual_temp.toFixed(2)}°C (${toF(zdata.actual_temp)}°F)`);
+          parts.push(`actual_temp=${zdata.actual_temp.toFixed(2)}°C (${toF(zdata.actual_temp).toFixed(0)}°F)`);
         if (zdata.setpoint !== undefined)
-          parts.push(`setpoint=${zdata.setpoint.toFixed(2)}°C (${toF(zdata.setpoint)}°F)`);
+          parts.push(`setpoint=${zdata.setpoint.toFixed(2)}°C (${toF(zdata.setpoint).toFixed(0)}°F)`);
         if (zdata.fan_speed !== undefined)
-          parts.push(`fan_speed=${zdata.fan_speed}`);
+          parts.push(`fan_speed=${zdata.fan_speed/1000}`);
         console.log(`  ${zname.padEnd(10)} ${parts.join(', ')}`);
       } else {
         console.log(`  ${zname.padEnd(10)} (no data received)`);
