@@ -11,11 +11,13 @@
  */
 
 import {
+  DEFAULT_ZONES,
   RESPONSE_TIMEOUT_MS,
   YdwgGateway,
   SocketCanTransport,
   HvacSession,
   type CanTransport,
+  type Zone,
 } from './hvac_core';
 
 // ── Signal K surface we use ───────────────────────────────────────────────
@@ -48,6 +50,7 @@ interface PluginOptions {
   pollIntervalMs:  number;
   mcuSrc:          number;
   mySrc:           number;
+  zones:           Zone[];
 }
 
 const PLUGIN_ID = 'signalk-empirbus-hvac';
@@ -130,6 +133,7 @@ export = function(app: SignalKApp) {
         transport: makeTransport(options),
         mcuSrc:    options.mcuSrc,
         mySrc:     options.mySrc,
+        zones:     options.zones?.length ? options.zones : DEFAULT_ZONES,
         logger:    (msg) => app.debug(msg),
       });
       activeSession = session;
@@ -217,6 +221,30 @@ export = function(app: SignalKApp) {
           minimum:     0,
           maximum:     251,
           description: 'N2K source address this plugin claims for itself on the bus. Must not collide with any other device.',
+        },
+        zones: {
+          type:  'array',
+          title: 'Zones',
+          description: 'List of HVAC zones to poll. Each zone has a human-readable name (used in Signal K paths) and an action byte — the command the MCU matches against in a zone-switch burst. Capture the action bytes from your boat\'s MFD↔MCU traffic. Defaults are the Azimut 60 Fly factory set.',
+          default: DEFAULT_ZONES,
+          items: {
+            type: 'object',
+            required: ['name', 'action'],
+            properties: {
+              name: {
+                type:        'string',
+                title:       'Name',
+                description: 'Zone name — appears in logs and as the camelCased Signal K path segment (e.g. "Crew Cabin" → environment.inside.crewCabin.*).',
+              },
+              action: {
+                type:        'number',
+                title:       'Action byte (decimal)',
+                minimum:     0,
+                maximum:     255,
+                description: 'Zone-switch command byte as decimal. For hex values, convert: 0xfa = 250, 0xfb = 251, etc.',
+              },
+            },
+          },
         },
       },
     },

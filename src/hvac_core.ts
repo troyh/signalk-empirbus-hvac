@@ -36,8 +36,26 @@ export const MY_SRC     = 11;    // Our N2K source address
 export const MCU_SRC    = 3;     // EmpirBus MCU-150
 export const BROADCAST  = 255;
 
-export const ZONE_ACTIONS = [0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff];
-export const ZONE_NAMES   = ['Salon', 'Helm', 'Guest', 'VIP', 'Owner', 'Crew Cabin'];
+/**
+ * A controllable HVAC zone. `action` is the command byte the MCU matches
+ * against in a zone-switch burst — it's boat-specific (captured from the
+ * MFD↔MCU traffic on the target vessel). `name` is the human label used
+ * in logs and as the Signal K path segment.
+ */
+export interface Zone {
+  name:   string;
+  action: number;
+}
+
+/** Default zones captured from the Azimut 60 Fly factory config. */
+export const DEFAULT_ZONES: Zone[] = [
+  { name: 'Salon',      action: 0xfa },
+  { name: 'Helm',       action: 0xfb },
+  { name: 'Guest',      action: 0xfc },
+  { name: 'VIP',        action: 0xfd },
+  { name: 'Owner',      action: 0xfe },
+  { name: 'Crew Cabin', action: 0xff },
+];
 
 export const DISCOVERY_TIMEOUT_MS = 2000;
 export const DUMP_WAIT_MS         = 3000;
@@ -438,15 +456,17 @@ export interface HvacSessionOptions {
   transport: CanTransport;
   mySrc?:    number;
   mcuSrc?:   number;
+  /** Zones to poll (defaults to DEFAULT_ZONES — the Azimut 60 Fly set). */
+  zones?:    Zone[];
   logger?:   Logger;
 }
 
 export type ZoneUpdateHandler = (zoneName: string, data: Record<string, number>) => void;
 
 export interface CycleOptions {
-  /** Zone (0-5) to switch to first — subsequent zones follow in natural order. */
+  /** Zone index (0..zones.length-1) to switch to first — subsequent zones follow in natural order. */
   startZone?: number;
-  /** Number of complete passes over all 6 zones. Omit for infinite cycling. */
+  /** Number of complete passes over all zones. Omit for infinite cycling. */
   passes?: number;
   /** Overall time budget for this cycle call. Omit for no overall timeout. */
   overallTimeoutMs?: number;
@@ -472,6 +492,7 @@ export class HvacSession {
   private readonly asm    = new FastPacketAssembler();
   private readonly mySrc:   number;
   private readonly mcuSrc:  number;
+  readonly zones:           Zone[];
   private readonly log:     Logger;
   private cmdSeq = 0x10;
 
@@ -479,6 +500,7 @@ export class HvacSession {
     this.gw     = opts.transport;
     this.mySrc  = opts.mySrc  ?? MY_SRC;
     this.mcuSrc = opts.mcuSrc ?? MCU_SRC;
+    this.zones  = opts.zones  ?? DEFAULT_ZONES;
     this.log    = opts.logger ?? (() => {});
   }
 
@@ -598,9 +620,14 @@ export class HvacSession {
     const onZone           = opts.onZone;
     const signal           = opts.signal;
 
+    const zoneCount = this.zones.length;
+    if (startZone < 0 || startZone >= zoneCount) {
+      throw new RangeError(`startZone ${startZone} out of range (0..${zoneCount - 1})`);
+    }
+
     const ordered = [
       startZone,
-      ...Array.from({ length: 6 }, (_, i) => i).filter(i => i !== startZone),
+      ...Array.from({ length: zoneCount }, (_, i) => i).filter(i => i !== startZone),
     ];
     const allZones: Record<string, ZoneData> = {};
 
@@ -610,10 +637,10 @@ export class HvacSession {
 
     let cycleIdx = 0;
     let passNum  = 1;
-    let currentName = ZONE_NAMES[ordered[0]!]!;
+    let currentName = this.zones[ordered[0]!]!.name;
 
     this.log(`    [pass ${passNum}] Switching to: ${currentName}`);
-    await this.sendBurst(ZONE_ACTIONS[ordered[0]!]!);
+    await this.sendBurst(this.zones[ordered[0]!]!.action);
     let lastSwitch = Date.now();
     cycleIdx = 1;
 
@@ -625,9 +652,9 @@ export class HvacSession {
           passNum++;
           cycleIdx = 0;
         }
-        currentName = ZONE_NAMES[ordered[cycleIdx]!]!;
+        currentName = this.zones[ordered[cycleIdx]!]!.name;
         this.log(`    [pass ${passNum}] Switching to: ${currentName}`);
-        await this.sendBurst(ZONE_ACTIONS[ordered[cycleIdx]!]!);
+        await this.sendBurst(this.zones[ordered[cycleIdx]!]!.action);
         lastSwitch = Date.now();
         cycleIdx++;
       }
