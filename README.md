@@ -20,7 +20,7 @@ Once configured, the plugin connects to the CAN bus, impersonates a Raymarine N2
 | `environment.inside.<zone>.temperature.setpoint` | Kelvin | zone thermostat setpoint |
 | `environment.inside.<zone>.fan.speed` | raw (milli-scale) | fan speed reported by MCU |
 
-`<zone>` is the configured zone name camelCased (`Crew Cabin` → `crewCabin`). Only zones whose thermostat broadcast includes a given field get that path — e.g. on the Azimut 60 Fly, Guest and Owner report only `actual_temp`.
+`<zone>` is the configured zone name camelCased (`Crew Cabin` → `crewCabin`). Only zones whose thermostat broadcast includes a given field get that path.
 
 ## How it works
 
@@ -34,6 +34,16 @@ The EmpirBus MCU-150 does not ship with public NMEA 2000 documentation for HVAC 
 6. **Disconnect** and sleep until the next poll interval.
 
 Re-registering each poll (rather than holding a single long-lived session) keeps bus traffic quiet — about 15 seconds of activity every 10 minutes by default.
+
+```
+This plugin was completely built by Claude Code with some help from me -- the *only* thing I explicitly wrote is this section of this README! The Raymarine Axioms have Digital Switching Control (DSC) pages provided by Azimut that allow, among other things, controlling the HVAC in the zones on the boat. This mechanism is not documented anywhere that I could find so I had to figure it out myself.
+
+My boat setup: My boat has a Condaria (branded Dometic) HVAC that is connected to the EmpirBus MCU's CANbus port. The Condaria uses J1939 and the EmpirBus MCU-150 has a CANbus port that was programmed by Azimut with the EmpirBus Studio software to understand the Condaria protocol -- which may be standard in the HVAC world for all I know -- and how to communicate with the Raymarine Axiom MFDs. I don't have the EmpirBus Studio software. I think using that software I could have had an easier time figuring out the data and protocol.
+
+How I did it: I recorded the NMEA logs as I changed the settings on the Axiom HVAC settings. I gave this log to Claude and told it what I did and, after some work, Claude figured out how to reverse-engineer the data in the PGN 126720 messages. The Condaria HVAC only sends temperature info when there's a change (either to the setpoint or the actual room temperature), but Claude (and I) figured out that the Axioms can poll it to get current status and Claude figured out the handshake protocol that the Raymarine uses. This plugin mimics that to get the temperatures from the HVAC unit.
+
+I have never tried this on any other boat but I am guessing that yours works similarly, the IDs in the data for each zone of the HVAC are likely different as are the NMEA IDs on your boat. These are all configurable in the plugin's SignalK settings. Let me know if I can help you figure out how to make it work on your boat.
+```
 
 ### Why poll that way?
 
@@ -66,7 +76,7 @@ npm install signalk-empirbus-hvac
 Or for development, clone this repo and link it:
 
 ```sh
-git clone https://github.com/<you>/signalk-empirbus-hvac
+git clone https://github.com/troyh/signalk-empirbus-hvac
 cd signalk-empirbus-hvac
 npm install
 npm run build
