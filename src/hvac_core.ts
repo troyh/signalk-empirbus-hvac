@@ -9,7 +9,8 @@
  *
  * YDWG-02 RAW protocol (TCP):
  *   Receive: "hh:mm:ss.ddd R CANID BYTE0 BYTE1 ...\r\n"
- *   Send:    "hh:mm:ss.ddd T CANID BYTE0 BYTE1 ...\r\n"
+ *   Send:    "hh:mm:ss.ddd R CANID BYTE0 BYTE1 ...\r\n"
+ *     (Per YD tech support — the T direction is not accepted for TX.)
  *   CANID is 8 hex digits including the EFF flag (0x80000000).
  *
  * Protocol summary (reverse-engineered from bus captures):
@@ -282,7 +283,7 @@ export class YdwgGateway implements CanTransport {
       .map(b => b.toString(16).toUpperCase().padStart(2, '0'))
       .join(' ');
 
-    const outLine = `${ts} T ${idHex} ${dataHex}`;
+    const outLine = `${ts} R ${idHex} ${dataHex}`;
     if (DEBUG) console.log(`[TX] ${outLine}`);
     this.socket.write(`${outLine}\r\n`, 'ascii');
   }
